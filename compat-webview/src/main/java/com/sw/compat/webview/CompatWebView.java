@@ -7,6 +7,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.webkit.ValueCallback;
 import android.webkit.WebView;
 
 import java.io.UnsupportedEncodingException;
@@ -84,13 +85,29 @@ public class CompatWebView extends WebView {
         }
     }
 
+    @Override
+    public void loadUrl(String url) {
+        if (url.startsWith("javascript:")) {
+            //有必要在执行 js 的时候确保 js 接口已经接入
+            startInjectJsInterfaceForCompat();
+        }
+        super.loadUrl(url);
+    }
+
+    @Override
+    public void evaluateJavascript(String script, ValueCallback<String> resultCallback) {
+        //有必要在执行 js 的时候确保 js 接口已经接入
+        startInjectJsInterfaceForCompat();
+        super.evaluateJavascript(script, resultCallback);
+    }
+
     /**
      * 从js端调用java方法，api17以下有安全漏洞，参考https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2012-6636
      * compatAddJavascriptInterface兼容性的解决了安全问题，17及之上沿用原api，17之下走封装的通道
      *
      * @param object the Java object to inject into this WebView's JavaScript
      *               context. Null values are ignored.
-     * @param name the name used to expose the object in JavaScript
+     * @param name   the name used to expose the object in JavaScript
      **/
     @SuppressLint({"JavascriptInterface", "AddJavascriptInterface"})
     public void compatAddJavascriptInterface(Object object, String name) {
@@ -107,13 +124,14 @@ public class CompatWebView extends WebView {
         if (methods == null) {
             return;
         }
-        StringBuilder sb = new StringBuilder("window.").append(name).append(" = {};");
+        StringBuilder sb = new StringBuilder("if (window.").append(name).append(" === undefined){");
+        sb.append("window.").append(name).append(" = {};}");
         for (Method method : methods) {
             if (!checkMethodValid(method)) {
                 continue;
             }
-            sb.append("window.").append(name).append(".");
-            sb.append(method.getName()).append(" = function(");
+            sb.append("if (window.").append(name).append(".").append(method.getName()).append(" === undefined){");
+            sb.append("window.").append(name).append(".").append(method.getName()).append(" = function(");
             Class<?>[] parameterTypes = method.getParameterTypes();
             int paramSize = parameterTypes.length;
             List<String> paramList = new ArrayList<>();
@@ -137,7 +155,7 @@ public class CompatWebView extends WebView {
                 }
             }
 
-            sb.append("); window.location.href =\"").append(scheme).append("://\"").append("+schemeEncode;};");
+            sb.append("); window.location.href =\"").append(scheme).append("://\"").append("+schemeEncode;};}");
         }
         compatEvaluateJavascript(sb.toString());
     }
@@ -171,6 +189,11 @@ public class CompatWebView extends WebView {
     }
 
     void onPageFinished() {
+        startInjectJsInterfaceForCompat();
+    }
+
+
+    private void startInjectJsInterfaceForCompat() {
         for (String name : injectHashMap.keySet()) {
             Object object = injectHashMap.get(name);
             injectJsInterfaceForCompat(object, name);
